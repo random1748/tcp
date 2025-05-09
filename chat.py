@@ -1,11 +1,11 @@
 import socket
 import threading
-import termcolor
+#import termcolor
 import os
-#
+version = 0.1
 HOST = '0.0.0.0'  # Listen for messages from any device
 PORT = 6969       # Port for communication
-alias = "default" # User alias
+alias = "newko" # User alias
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 def refresh():
@@ -16,6 +16,7 @@ def refresh():
             cleaned_lines.append(line)
     for i in cleaned_lines:
         print(i)
+
 messages = ["################################",
             "###:3:3:3:3###:3:3:3###:3:3#####",
             "######:3#####:3########:3##:3###",
@@ -23,7 +24,9 @@ messages = ["################################",
             "######:3######:3:3:3###:3#######",
             "################################",
             "Trans-fem Communication Protocol\n"]
+hosts = []
 def receive_messages():
+    global messages
     """Continuously listens for incoming messages."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
         udp_socket.bind(("", PORT))
@@ -40,8 +43,18 @@ def receive_messages():
                 udp_socket.settimeout(0.5)
                 try:
                     data, addr = udp_socket.recvfrom(1024)
-                    messages.append(f"[GC] {addr[0]}/{data.decode()}")
-                    refresh()
+                    if data:
+                        if "Signing on" in data.decode():
+                            messages.append("hosts:")
+                            broadcast("5555"+alias)
+                            
+                            #messages.append("sending alias to new host")
+                        elif "5555" in data.decode():
+                            messages.append(data.decode().replace("5555", "").split(":")[0]+"("+addr[0]+")")
+                            
+                        else:   
+                            messages.append(f"[GC] {addr[0]}/{data.decode()}")
+                        refresh()
                 except socket.timeout:
                     pass
 
@@ -52,7 +65,25 @@ def receive_messages():
                     with conn:
                         data = conn.recv(1024)
                         if data:
-                            messages.append(f"[PM] {addr[0]}/{data.decode()}")
+                            if data.startswith(b"[FILE]"):  # Identify that it's a file
+                                file_info = data.split(b"\n", 1)
+                                file_name = file_info[0][6:].decode()  # Extract filename from header
+                                file_content = file_info[1]
+
+                                with open(f"received_{file_name}", "wb") as file:
+                                    file.write(file_content)  # Write the first chunk
+
+                                    while True:
+                                        chunk = conn.recv(1024)
+                                        if not chunk:
+                                            break  # End loop when file transfer completes
+                                        file.write(chunk)  # Write subsequent chunks
+
+                                messages.append(f"[FILE RECEIVED] {file_name}")
+                                refresh()
+
+                            else:
+                                messages.append(f"[PM] {addr[0]}/{data.decode()}")
                             refresh()
                             conn.sendall(b":3")
                 except socket.timeout:
@@ -65,9 +96,25 @@ def send_pm(message, recipient='127.0.0.1'):
             client_socket.connect((recipient, PORT))
             client_socket.sendall(f"{alias}: {message}".encode())
             response = client_socket.recv(1024)
-            termcolor.cprint(f"[PM ACK] {response.decode()}", "green")
+            print(f"[PM ACK] {response.decode()}", "green")
         except socket.error:
             messages.append(f"Error: Unable to connect to {recipient}")
+def send_file(file_path, recipient='127.0.0.1'):
+    """Send a file in chunks with an explicit header."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+        try:
+            client_socket.connect((recipient, PORT))
+            with open(file_path, "rb") as file:
+                client_socket.sendall(f"[FILE]{os.path.basename(file_path)}\n".encode())  # Send header first
+                
+                while chunk := file.read(1024):
+                    client_socket.sendall(chunk)  # Send the file content in chunks
+                
+            print(f"File '{file_path}' sent successfully.")
+        except socket.error:
+            print(f"Error: Unable to connect to {recipient}")
+
+
 
 def broadcast(message):
     """Sends a broadcast message to all devices on the network."""
@@ -77,6 +124,7 @@ def broadcast(message):
 
 # Start listening for messages in a separate thread
 threading.Thread(target=receive_messages, daemon=True).start()
+# host discovery
 
 # Interactive messaging loop
 while True:
@@ -92,7 +140,11 @@ while True:
             if message == "0":
                 send_pm("Connection terminated", recipient)
                 break
-            send_pm(message, recipient)
+            if "/" in message:
+                filename = message.replace("/", "").split()
+                send_file(filename[0], recipient)
+            else:
+                send_pm(message, recipient)
     elif mode == "2":
         broadcast("Signing on")
         while True:
@@ -101,4 +153,8 @@ while True:
             if message == "0":
                 broadcast("Signing off")
                 break
-            broadcast(message)
+            if "/" in message:
+                filename = message.replace("/", "").split()
+                send_file(filename[0], filename[1])
+            else:
+                broadcast(message)
